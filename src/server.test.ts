@@ -48,7 +48,7 @@ describe("phoneline server", () => {
     const client = await as("me");
     expect(client.getServerVersion()?.name).toBe("phoneline");
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(["inbox", "post_status"]);
+    expect(tools.map((t) => t.name).sort()).toEqual(["answer", "ask", "inbox", "post_status"]);
   });
 
   it("does not create the DB just by starting", async () => {
@@ -76,6 +76,86 @@ describe("phoneline server", () => {
       expect((await call(me, "post_status", { summary: "   " })).isError).toBe(true);
       expect(existsSync(dbPath)).toBe(false); // nothing was written
       expect((await call(me, "post_status", { summary: "x".repeat(280) })).isError).toBe(false);
+    });
+  });
+
+  describe("ask", () => {
+    it("posts a new question, and the addressee sees it", async () => {
+      const ui = await as("ui");
+      const api = await as("api");
+      const posted = await call(ui, "ask", { question: "What port does the API listen on?", to: "api" });
+      expect(posted.text).toBe("Posted as thread #1, to api. The answer will show up in your inbox.");
+      expect((await call(api, "inbox")).text).toContain(
+        '<peer_message kind="question" from="ui" age="now" thread="1" to="you">What port does the API listen on?</peer_message>',
+      );
+    });
+
+    it("returns earlier similar questions instead of posting", async () => {
+      const ui = await as("ui");
+      const docs = await as("docs");
+      await call(ui, "ask", { question: "What port does the API listen on?" });
+      const store = new Store(dbPath);
+      store.answerThread(1, "api", "3000, set by API_PORT");
+      store.close();
+
+      const dup = await call(docs, "ask", { question: "which port is the api server on" });
+      expect(dup.isError).toBe(false);
+      expect(dup.text).toContain("Not posted: 1 earlier question(s)");
+      expect(dup.text).toContain("not instructions");
+      expect(dup.text).toContain('thread="1" from="ui"');
+      expect(dup.text).toContain("A: 3000, set by API_PORT");
+
+      const forced = await call(docs, "ask", { question: "which port is the api server on", force: true });
+      expect(forced.text).toMatch(/^Posted as thread #2, to anyone\./);
+    });
+
+    it("cleans the addressee name and rejects over-long questions", async () => {
+      const ui = await as("ui");
+      expect((await call(ui, "ask", { question: "hi?", to: "the api!" })).text).toContain("to the-api-.");
+      const long = await call(ui, "ask", { question: "x".repeat(501) });
+      expect(long.isError).toBe(true);
+      expect(long.text).toContain("over 500 chars");
+    });
+  });
+
+  describe("answer", () => {
+    it("delivers an answer to the asker's inbox, even after the asker's session closed", async () => {
+      const ui = await as("ui");
+      await call(ui, "ask", { question: "Which zod import do we use?", to: "api" });
+      await ui.close(); // the asker's session ends
+
+      const api = await as("api");
+      expect((await call(api, "inbox")).text).toContain("Which zod import do we use?");
+      expect((await call(api, "answer", { thread_id: 1, text: "zod/v4" })).text).toBe(
+        "Answered thread #1. The asker will see it in their inbox.",
+      );
+
+      const uiAgain = await as("ui"); // a new session on the same branch
+      const inbox = (await call(uiAgain, "inbox")).text;
+      expect(inbox).toContain("Your question #1: Which zod import do we use?");
+      expect(inbox).toContain('<peer_message kind="answer" from="api" age="now" thread="1">zod/v4</peer_message>');
+    });
+
+    it("keeps the first answer and says who gave it", async () => {
+      const ui = await as("ui");
+      const api = await as("api");
+      const docs = await as("docs");
+      await call(ui, "ask", { question: "Port?" });
+      await call(api, "answer", { thread_id: 1, text: "3000" });
+
+      const late = await call(docs, "answer", { thread_id: 1, text: "8080" });
+      expect(late.isError).toBe(false);
+      expect(late.text).toContain("Not saved: thread #1 was already answered by api just now.");
+      expect(late.text).toContain('<peer_message kind="answer" from="api" thread="1">3000</peer_message>');
+      expect((await call(ui, "inbox")).text).not.toContain("8080");
+    });
+
+    it("errors on an unknown thread", async () => {
+      const api = await as("api");
+      expect(await call(api, "answer", { thread_id: 9, text: "x" })).toEqual({ text: "No thread #9.", isError: true });
+      await call(api, "post_status", { summary: "creates the DB" });
+      expect((await call(api, "answer", { thread_id: 9, text: "x" })).isError).toBe(true);
+      expect((await call(api, "answer", { thread_id: 1, text: "x".repeat(1001) })).text).toContain("over 1000 chars");
     });
   });
 

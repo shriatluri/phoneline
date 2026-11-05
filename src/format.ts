@@ -1,3 +1,4 @@
+import type { Thread } from "./store.js";
 import type { UnreadItem } from "./unread.js";
 
 // Everything another agent wrote reaches the model through here, wrapped as
@@ -54,6 +55,23 @@ export function formatItem(item: UnreadItem, me: string, now: number): string {
         peerMessage({ kind: "answer", from: item.from, age, thread: item.thread ?? undefined }, item.text ?? "")
       );
   }
+}
+
+/** An earlier question that ask found, cut to 200 chars of question and 400 of answer. */
+export function formatCandidate(t: Thread, now: number): string {
+  const body =
+    `Q: ${clip(t.question, 200)}\n` + (t.answer === null ? "A: (no answer yet)" : `A: ${clip(t.answer, 400)}`);
+  return peerMessage(
+    {
+      kind: "earlier_question",
+      thread: t.id,
+      from: t.from_agent,
+      age: formatAge(now - t.created_at),
+      answered_by: t.answered_by ?? undefined,
+      answered: t.answered_at === null ? undefined : formatAge(now - t.answered_at),
+    },
+    body,
+  );
 }
 
 export const INBOX_LIMITS = { items: 20, chars: 8000 };
