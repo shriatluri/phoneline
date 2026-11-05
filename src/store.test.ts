@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SCHEMA_VERSION, Store, defaultDbPath, repoKey, repoRoot } from "./store.js";
+import { SCHEMA_VERSION, Store, defaultDbPath, openStore, repoKey, repoRoot } from "./store.js";
 
 describe("Store", () => {
   let dir: string;
@@ -104,6 +104,27 @@ describe("Store", () => {
       expect(store.currentSeq()).toBe(4); // one shared, monotonic counter
     } finally {
       other.close();
+    }
+  });
+});
+
+describe("openStore", () => {
+  it("creates the DB only when asked to", () => {
+    const dir = mkdtempSync(join(tmpdir(), "phoneline-lazy-"));
+    const path = join(dir, "sub", "repo.db");
+    try {
+      expect(openStore(path)).toBeUndefined();
+      expect(existsSync(join(dir, "sub"))).toBe(false); // not even the directory
+
+      const created = openStore(path, { create: true })!;
+      created.setStatus("alice", "hi");
+      created.close();
+
+      const reopened = openStore(path)!;
+      expect(reopened.getStatuses()).toHaveLength(1);
+      reopened.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

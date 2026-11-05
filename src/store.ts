@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -115,6 +115,16 @@ export function repoKey(root: string): string {
 /** PHONELINE_DB wins; otherwise ~/.phoneline/<repo-key>.db */
 export function defaultDbPath(cwd = projectDir()): string {
   return process.env.PHONELINE_DB || join(homedir(), ".phoneline", `${repoKey(repoRoot(cwd))}.db`);
+}
+
+/**
+ * Opens the store for a repo. Unless `create` is set, a missing file returns
+ * undefined instead of creating one, so read-only paths (like an empty
+ * inbox in a repo that never used phoneline) leave nothing behind.
+ */
+export function openStore(path = defaultDbPath(), { create = false } = {}): Store | undefined {
+  if (!create && !existsSync(path)) return undefined;
+  return new Store(path);
 }
 
 function retryBusy<T>(fn: () => T, attempts = 50, delayMs = 20): T {
