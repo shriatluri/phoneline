@@ -107,6 +107,29 @@ export interface Thread {
   seq: number;
 }
 
+// Common English words that would make every question look alike.
+const STOPWORDS = new Set(
+  (
+    "a about after again all am an and any are as at be been before being but by can could " +
+    "did do does doing don for from had has have having he her here hers him his how i if in " +
+    "into is it its just me my no nor not now of off on once only or other our out over own " +
+    "same she should so some such than that the their them then there these they this those " +
+    "to too under until up very was we were what when where which while who whom why will " +
+    "with would you your anyone know does someone anybody"
+  ).split(" "),
+);
+
+/**
+ * Turn free text into an FTS5 query: drop stopwords, quote each remaining
+ * term, OR them together. Returns undefined when nothing is left to search.
+ */
+export function ftsQuery(text: string): string | undefined {
+  const terms = new Set(
+    (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((t) => t.length > 1 && !STOPWORDS.has(t)),
+  );
+  return terms.size ? [...terms].map((t) => `"${t}"`).join(" OR ") : undefined;
+}
+
 /** The directory Claude Code was started in; the server and hook both resolve from here. */
 export function projectDir(): string {
   return process.env.CLAUDE_PROJECT_DIR || process.cwd();
@@ -284,6 +307,25 @@ export class Store {
         .get(answer, answeredBy, now, seq, id) as Thread;
       return { thread, won: true };
     });
+  }
+
+  /**
+   * Up to `limit` threads whose questions best match `text`, best first by
+   * bm25. There is no score cutoff: bm25 scores shift with the corpus, so the
+   * caller (ultimately the model) judges whether a match is a real duplicate.
+   */
+  searchThreads(text: string, limit = 3): Thread[] {
+    const query = ftsQuery(text);
+    if (!query) return [];
+    return this.db
+      .prepare(
+        `SELECT threads.* FROM threads_fts
+           JOIN threads ON threads.id = threads_fts.rowid
+          WHERE threads_fts MATCH ?
+          ORDER BY bm25(threads_fts)
+          LIMIT ?`,
+      )
+      .all(query, limit) as Thread[];
   }
 
   getThread(id: number): Thread | undefined {
