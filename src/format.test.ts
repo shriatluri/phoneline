@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { clip, escapePeer, fitToBudget, formatAge, formatItem, peerMessage } from "./format.js";
+import { clip, escapePeer, fitToBudget, formatAge, formatCandidate, formatItem, peerMessage } from "./format.js";
+import type { Thread } from "./store.js";
 import type { UnreadItem } from "./unread.js";
 
 const now = 1_000_000_000_000;
@@ -41,6 +42,19 @@ describe("format", () => {
     const a: UnreadItem = { kind: "answer", seq: 3, from: "api", at: now, thread: 4, to: null, question: "port?", text: "3000" };
     expect(formatItem(a, "me", now)).toBe(
       'Your question #4: port?\n<peer_message kind="answer" from="api" age="now" thread="4">3000</peer_message>',
+    );
+  });
+
+  it("formats ask candidates, clipped", () => {
+    const t: Thread = {
+      id: 7, from_agent: "ui", to_agent: null, question: "q".repeat(300), answer: "a".repeat(500),
+      answered_by: "api", created_at: now - 2 * 3_600_000, answered_at: now - 5 * 60_000, seq: 9,
+    };
+    const out = formatCandidate(t, now);
+    expect(out).toMatch(/^<peer_message kind="earlier_question" thread="7" from="ui" age="2h" answered_by="api" answered="5m">/);
+    expect(out).toContain(`Q: ${"q".repeat(199)}…\nA: ${"a".repeat(399)}…</peer_message>`);
+    expect(formatCandidate({ ...t, answer: null, answered_by: null, answered_at: null }, now)).toContain(
+      "A: (no answer yet)",
     );
   });
 
