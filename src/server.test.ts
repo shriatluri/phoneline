@@ -3,7 +3,7 @@ import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type ServerOptions, createServer } from "./server.js";
+import { type ServerOptions, createServer, pruneOnStart } from "./server.js";
 import { Store } from "./store.js";
 
 /** A connected client acting as one agent. */
@@ -76,6 +76,24 @@ describe("phoneline server", () => {
       expect((await call(me, "post_status", { summary: "   " })).isError).toBe(true);
       expect(existsSync(dbPath)).toBe(false); // nothing was written
       expect((await call(me, "post_status", { summary: "x".repeat(280) })).isError).toBe(false);
+    });
+  });
+
+  describe("pruneOnStart", () => {
+    it("prunes an existing DB and leaves a missing one missing", () => {
+      pruneOnStart(dbPath);
+      expect(existsSync(dbPath)).toBe(false);
+
+      const now = Date.now();
+      const store = new Store(dbPath);
+      store.setStatus("old", "stale", now - 8 * 24 * 60 * 60 * 1000);
+      store.setStatus("new", "fresh", now);
+      store.close();
+
+      pruneOnStart(dbPath, now);
+      const after = new Store(dbPath);
+      expect(after.getStatuses().map((s) => s.agent)).toEqual(["new"]);
+      after.close();
     });
   });
 

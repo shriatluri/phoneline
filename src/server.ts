@@ -130,7 +130,26 @@ export function createServer(opts: ServerOptions = {}): McpServer {
   return server;
 }
 
+/**
+ * Delete expired rows. Runs at server start only, because the hook opens the
+ * DB read-only. A missing DB stays missing, and a failure only logs.
+ */
+export function pruneOnStart(dbPath = defaultDbPath(), now = Date.now()): void {
+  try {
+    const s = openStore(dbPath);
+    if (!s) return;
+    try {
+      s.prune(now);
+    } finally {
+      s.close();
+    }
+  } catch (err) {
+    console.error(`phoneline: pruning failed: ${err}`);
+  }
+}
+
 export async function startStdioServer(): Promise<void> {
+  pruneOnStart();
   serveStdio(() => createServer());
   // stdout carries JSON-RPC, so any logging must go to stderr.
   console.error(`phoneline ${VERSION} MCP server running on stdio`);
