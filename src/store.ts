@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -23,7 +23,8 @@ INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ${SCHEMA_VERSI
 CREATE TABLE IF NOT EXISTS agents (
   name          TEXT PRIMARY KEY,
   registered_at INTEGER NOT NULL,
-  last_seen_at  INTEGER NOT NULL
+  last_seen_at  INTEGER NOT NULL,
+  server_pid    INTEGER          -- last MCP server process to act as this agent
 );
 
 CREATE TABLE IF NOT EXISTS statuses (
@@ -42,7 +43,6 @@ CREATE TABLE IF NOT EXISTS threads (
   answered_by TEXT,
   created_at  INTEGER NOT NULL,
   answered_at INTEGER,
-  resolved    INTEGER NOT NULL DEFAULT 0,
   seq         INTEGER NOT NULL
 );
 
@@ -59,6 +59,7 @@ export interface Agent {
   name: string;
   registered_at: number;
   last_seen_at: number;
+  server_pid: number | null;
 }
 
 export interface Status {
@@ -77,33 +78,53 @@ export interface Thread {
   answered_by: string | null;
   created_at: number;
   answered_at: number | null;
-  resolved: number;
   seq: number;
 }
 
-/** Git repo root for `cwd`, or `cwd` itself when it is not inside a repo. */
-export function repoRoot(cwd = process.cwd()): string {
+/** The directory Claude Code was started in; the server and hook both resolve from here. */
+export function projectDir(): string {
+  return process.env.CLAUDE_PROJECT_DIR || process.cwd();
+}
+
+/**
+ * The repo's shared .git directory, or `cwd` itself when it is not inside a repo.
+ * A main checkout and its worktrees all return the same path, so they share a DB.
+ */
+export function repoRoot(cwd = projectDir()): string {
   try {
-    return execFileSync("git", ["rev-parse", "--show-toplevel"], {
+    const dir = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
+    return realpathSync(dir);
   } catch {
     return cwd;
   }
 }
 
-/** e.g. "/Users/me/code/My App" -> "my-app-1a2b3c4d" */
+/** e.g. "/Users/me/code/My App/.git" -> "my-app-1a2b3c4d" */
 export function repoKey(root: string): string {
-  const name = basename(root).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "repo";
+  // The common dir is usually ".../<repo>/.git", so name it after its parent.
+  const display = basename(root) === ".git" ? basename(dirname(root)) : basename(root, ".git");
+  const name = display.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "repo";
   const hash = createHash("sha256").update(root).digest("hex").slice(0, 8);
   return `${name}-${hash}`;
 }
 
 /** PHONELINE_DB wins; otherwise ~/.phoneline/<repo-key>.db */
-export function defaultDbPath(cwd = process.cwd()): string {
+export function defaultDbPath(cwd = projectDir()): string {
   return process.env.PHONELINE_DB || join(homedir(), ".phoneline", `${repoKey(repoRoot(cwd))}.db`);
+}
+
+/**
+ * Opens the store for a repo. Unless `create` is set, a missing file returns
+ * undefined instead of creating one, so read-only paths (like an empty
+ * inbox in a repo that never used phoneline) leave nothing behind.
+ */
+export function openStore(path = defaultDbPath(), { create = false } = {}): Store | undefined {
+  if (!create && !existsSync(path)) return undefined;
+  return new Store(path);
 }
 
 function retryBusy<T>(fn: () => T, attempts = 50, delayMs = 20): T {
@@ -147,15 +168,20 @@ export class Store {
 
   // --- agents ---------------------------------------------------------------
 
-  /** Insert the agent, or bump last_seen_at if it already exists. */
-  registerAgent(name: string, now = Date.now()): Agent {
+  /**
+   * Insert the agent, or bump last_seen_at if it already exists. Pass the
+   * server's pid to record which process is acting as this agent.
+   */
+  registerAgent(name: string, now = Date.now(), serverPid?: number): Agent {
     return this.db
       .prepare(
-        `INSERT INTO agents (name, registered_at, last_seen_at) VALUES (?, ?, ?)
-         ON CONFLICT(name) DO UPDATE SET last_seen_at = excluded.last_seen_at
+        `INSERT INTO agents (name, registered_at, last_seen_at, server_pid) VALUES (?, ?, ?, ?)
+         ON CONFLICT(name) DO UPDATE SET
+           last_seen_at = excluded.last_seen_at,
+           server_pid = coalesce(excluded.server_pid, server_pid)
          RETURNING *`,
       )
-      .get(name, now, now) as Agent;
+      .get(name, now, now, serverPid ?? null) as Agent;
   }
 
   getAgents(): Agent[] {
@@ -202,17 +228,31 @@ export class Store {
     });
   }
 
-  /** Records the answer and marks the thread resolved. Returns undefined if the id is unknown. */
-  answerThread(id: number, answeredBy: string, answer: string, now = Date.now()): Thread | undefined {
+  /**
+   * Records the answer if the thread has none yet: the first answer wins.
+   * `won` is false when someone already answered; `thread` then shows who.
+   * Returns undefined if the id is unknown.
+   */
+  answerThread(
+    id: number,
+    answeredBy: string,
+    answer: string,
+    now = Date.now(),
+  ): { thread: Thread; won: boolean } | undefined {
     return this.write(() => {
+      const existing = this.getThread(id);
+      if (!existing) return undefined;
+      if (existing.answer !== null) return { thread: existing, won: false };
+
       this.registerAgent(answeredBy, now);
       const seq = this.nextSeq();
-      return this.db
+      const thread = this.db
         .prepare(
-          `UPDATE threads SET answer = ?, answered_by = ?, answered_at = ?, resolved = 1, seq = ?
-           WHERE id = ? RETURNING *`,
+          `UPDATE threads SET answer = ?, answered_by = ?, answered_at = ?, seq = ?
+           WHERE id = ? AND answer IS NULL RETURNING *`,
         )
-        .get(answer, answeredBy, now, seq, id) as Thread | undefined;
+        .get(answer, answeredBy, now, seq, id) as Thread;
+      return { thread, won: true };
     });
   }
 
@@ -220,10 +260,10 @@ export class Store {
     return this.db.prepare("SELECT * FROM threads WHERE id = ?").get(id) as Thread | undefined;
   }
 
-  /** Threads created or answered after `sinceSeq`; `openOnly` keeps unresolved ones (for ask's dedupe). */
+  /** Threads created or answered after `sinceSeq`; `openOnly` keeps unanswered ones. */
   getThreads({ sinceSeq = 0, openOnly = false } = {}): Thread[] {
     return this.db
-      .prepare(`SELECT * FROM threads WHERE seq > ? ${openOnly ? "AND resolved = 0" : ""} ORDER BY seq`)
+      .prepare(`SELECT * FROM threads WHERE seq > ? ${openOnly ? "AND answer IS NULL" : ""} ORDER BY seq`)
       .all(sinceSeq) as Thread[];
   }
 
