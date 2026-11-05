@@ -56,10 +56,23 @@ describe("Store", () => {
     expect(store.getThreads({ openOnly: true }).map((t) => t.id)).toEqual([thread.id]);
 
     const answered = store.answerThread(thread.id, "bob", "plain `zod`");
-    expect(answered).toMatchObject({ answer: "plain `zod`", answered_by: "bob" });
-    expect(answered!.seq).toBeGreaterThan(thread.seq); // the asker sees the answer as new
+    expect(answered?.won).toBe(true);
+    expect(answered?.thread).toMatchObject({ answer: "plain `zod`", answered_by: "bob" });
+    expect(answered!.thread.seq).toBeGreaterThan(thread.seq); // the asker sees the answer as new
     expect(store.getThreads({ openOnly: true })).toEqual([]);
     expect(store.answerThread(9999, "bob", "nope")).toBeUndefined();
+  });
+
+  it("keeps the first answer", () => {
+    const thread = store.createThread("alice", "Which port?");
+    store.answerThread(thread.id, "bob", "3000");
+    const seq = store.currentSeq();
+
+    const second = store.answerThread(thread.id, "carol", "8080");
+    expect(second?.won).toBe(false);
+    expect(second?.thread).toMatchObject({ answer: "3000", answered_by: "bob" });
+    expect(store.getThread(thread.id)?.answer).toBe("3000");
+    expect(store.currentSeq()).toBe(seq); // a losing answer writes nothing
   });
 
   it("records which server pid acts as an agent", () => {

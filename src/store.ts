@@ -218,17 +218,31 @@ export class Store {
     });
   }
 
-  /** Records the answer. Returns undefined if the id is unknown. */
-  answerThread(id: number, answeredBy: string, answer: string, now = Date.now()): Thread | undefined {
+  /**
+   * Records the answer if the thread has none yet: the first answer wins.
+   * `won` is false when someone already answered; `thread` then shows who.
+   * Returns undefined if the id is unknown.
+   */
+  answerThread(
+    id: number,
+    answeredBy: string,
+    answer: string,
+    now = Date.now(),
+  ): { thread: Thread; won: boolean } | undefined {
     return this.write(() => {
+      const existing = this.getThread(id);
+      if (!existing) return undefined;
+      if (existing.answer !== null) return { thread: existing, won: false };
+
       this.registerAgent(answeredBy, now);
       const seq = this.nextSeq();
-      return this.db
+      const thread = this.db
         .prepare(
           `UPDATE threads SET answer = ?, answered_by = ?, answered_at = ?, seq = ?
-           WHERE id = ? RETURNING *`,
+           WHERE id = ? AND answer IS NULL RETURNING *`,
         )
-        .get(answer, answeredBy, now, seq, id) as Thread | undefined;
+        .get(answer, answeredBy, now, seq, id) as Thread;
+      return { thread, won: true };
     });
   }
 
