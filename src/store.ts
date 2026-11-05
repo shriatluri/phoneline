@@ -7,6 +7,15 @@ import { basename, dirname, join } from "node:path";
 
 export const SCHEMA_VERSION = 1;
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** How long rows live before prune() deletes them. */
+export const RETENTION = {
+  statusMs: 7 * DAY_MS,
+  openThreadMs: 7 * DAY_MS,
+  // Answered threads are the dedupe corpus for ask, so they live longer.
+  answeredThreadMs: 30 * DAY_MS,
+};
+
 // Every write bumps one global counter (meta.seq) and stamps the row it touched
 // with the new value. Read cursors store the last seq an agent has seen, so
 // "what is new to me" is just `WHERE seq > cursor`. We use a counter instead of
@@ -184,6 +193,10 @@ export class Store {
       .get(name, now, now, serverPid ?? null) as Agent;
   }
 
+  getAgent(name: string): Agent | undefined {
+    return this.db.prepare("SELECT * FROM agents WHERE name = ?").get(name) as Agent | undefined;
+  }
+
   getAgents(): Agent[] {
     return this.db.prepare("SELECT * FROM agents ORDER BY name").all() as Agent[];
   }
@@ -289,11 +302,31 @@ export class Store {
     });
   }
 
+  // --- retention ------------------------------------------------------------
+
+  /** Delete old statuses and threads (see RETENTION). Returns how many rows went. */
+  prune(now = Date.now()): { statuses: number; threads: number } {
+    return this.write(() => {
+      const statuses = this.db
+        .prepare("DELETE FROM statuses WHERE updated_at < ?")
+        .run(now - RETENTION.statusMs).changes;
+      const threads = this.db
+        .prepare(
+          `DELETE FROM threads
+            WHERE (answer IS NULL AND created_at < ?)
+               OR (answer IS NOT NULL AND answered_at < ?)`,
+        )
+        .run(now - RETENTION.openThreadMs, now - RETENTION.answeredThreadMs).changes;
+      return { statuses, threads };
+    });
+  }
+
   // --- internals ------------------------------------------------------------
 
   // IMMEDIATE takes the write lock up front, so the busy timeout applies and
-  // two processes can't both read the same seq before bumping it.
-  private write<T>(fn: () => T): T {
+  // two processes can't both read the same seq before bumping it. Nested
+  // calls become savepoints inside the outer transaction.
+  write<T>(fn: () => T): T {
     return this.db.transaction(fn).immediate();
   }
 

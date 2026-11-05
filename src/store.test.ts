@@ -81,6 +81,23 @@ describe("Store", () => {
     expect(store.registerAgent("alice").server_pid).toBe(4242); // writes without a pid keep it
   });
 
+  it("prunes old statuses and threads", () => {
+    const day = 24 * 60 * 60 * 1000;
+    const now = 100 * day;
+    store.setStatus("old", "stale", now - 8 * day);
+    store.setStatus("new", "fresh", now - 6 * day);
+    store.createThread("a", "old open", null, now - 8 * day);
+    store.createThread("a", "new open", null, now - 6 * day);
+    const oldAnswered = store.createThread("a", "old answered", null, now - 40 * day);
+    store.answerThread(oldAnswered.id, "b", "x", now - 31 * day);
+    const keptAnswered = store.createThread("a", "kept answered", null, now - 40 * day);
+    store.answerThread(keptAnswered.id, "b", "y", now - 20 * day); // answered 20 days ago: keep
+
+    expect(store.prune(now)).toEqual({ statuses: 1, threads: 2 });
+    expect(store.getStatuses().map((s) => s.agent)).toEqual(["new"]);
+    expect(store.getThreads().map((t) => t.question).sort()).toEqual(["kept answered", "new open"]);
+  });
+
   it("round-trips read cursors", () => {
     expect(store.getCursor("alice")).toBe(0);
     store.setStatus("bob", "hello");
