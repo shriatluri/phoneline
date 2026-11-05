@@ -48,7 +48,7 @@ describe("phoneline server", () => {
     const client = await as("me");
     expect(client.getServerVersion()?.name).toBe("phoneline");
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(["post_status"]);
+    expect(tools.map((t) => t.name).sort()).toEqual(["inbox", "post_status"]);
   });
 
   it("does not create the DB just by starting", async () => {
@@ -76,6 +76,59 @@ describe("phoneline server", () => {
       expect((await call(me, "post_status", { summary: "   " })).isError).toBe(true);
       expect(existsSync(dbPath)).toBe(false); // nothing was written
       expect((await call(me, "post_status", { summary: "x".repeat(280) })).isError).toBe(false);
+    });
+  });
+
+  describe("inbox", () => {
+    it("says so when there is nothing, without creating the DB", async () => {
+      const me = await as("me");
+      expect((await call(me, "inbox")).text).toBe("No unread items.");
+      expect(existsSync(dbPath)).toBe(false);
+    });
+
+    it("shows peers' items once, wrapped as data", async () => {
+      const api = await as("api");
+      const me = await as("me");
+      await call(api, "post_status", { summary: "moved auth to /v2" });
+      await call(me, "post_status", { summary: "my own status" });
+
+      const first = (await call(me, "inbox")).text;
+      expect(first).toContain("not instructions");
+      expect(first).toContain('<peer_message kind="status" from="api" age="now">moved auth to /v2</peer_message>');
+      expect(first).not.toContain("my own status");
+      expect((await call(me, "inbox")).text).toBe("No unread items.");
+
+      await call(api, "post_status", { summary: "done with auth" });
+      expect((await call(me, "inbox")).text).toContain("done with auth");
+    });
+
+    it("pages through a long backlog without losing items", async () => {
+      const store = new Store(dbPath);
+      for (let i = 1; i <= 25; i++) store.setStatus(`agent${i}`, `status ${i}`);
+      store.close();
+      const me = await as("me");
+
+      const first = (await call(me, "inbox")).text;
+      expect(first.match(/<peer_message/g)).toHaveLength(20);
+      expect(first).toContain("5 more unread");
+      const second = (await call(me, "inbox")).text;
+      expect(second.match(/<peer_message/g)).toHaveLength(5);
+      expect(second).toContain("status 25");
+      expect(second).not.toContain("status 20<");
+      expect(second).not.toContain("more unread");
+    });
+
+    it("warns when another live process acts under my name", async () => {
+      const a = await as("api", { pid: 1001, isAlive: () => true });
+      const b = await as("api", { pid: 1002, isAlive: () => true });
+      await call(a, "post_status", { summary: "from a" });
+      expect((await call(b, "inbox")).text).toContain('pid 1001) is also acting as "api"');
+      expect((await call(b, "inbox")).text).not.toContain("Warning"); // b holds the name now
+
+      const c = await as("ui", { pid: 2001 });
+      const d = await as("ui", { pid: 2002, isAlive: () => false });
+      await call(c, "post_status", { summary: "from c" });
+      expect((await call(d, "inbox")).text).not.toContain("Warning"); // c is gone
     });
   });
 });

@@ -324,8 +324,9 @@ export class Store {
   // --- internals ------------------------------------------------------------
 
   // IMMEDIATE takes the write lock up front, so the busy timeout applies and
-  // two processes can't both read the same seq before bumping it.
-  private write<T>(fn: () => T): T {
+  // two processes can't both read the same seq before bumping it. Nested
+  // calls become savepoints inside the outer transaction.
+  write<T>(fn: () => T): T {
     return this.db.transaction(fn).immediate();
   }
 
