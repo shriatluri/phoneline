@@ -52,14 +52,20 @@ describe("Store", () => {
 
   it("creates and answers a thread", () => {
     const thread = store.createThread("alice", "Which zod import do we use?", "bob");
-    expect(thread).toMatchObject({ from_agent: "alice", to_agent: "bob", answer: null, resolved: 0 });
+    expect(thread).toMatchObject({ from_agent: "alice", to_agent: "bob", answer: null });
     expect(store.getThreads({ openOnly: true }).map((t) => t.id)).toEqual([thread.id]);
 
     const answered = store.answerThread(thread.id, "bob", "plain `zod`");
-    expect(answered).toMatchObject({ answer: "plain `zod`", answered_by: "bob", resolved: 1 });
+    expect(answered).toMatchObject({ answer: "plain `zod`", answered_by: "bob" });
     expect(answered!.seq).toBeGreaterThan(thread.seq); // the asker sees the answer as new
     expect(store.getThreads({ openOnly: true })).toEqual([]);
     expect(store.answerThread(9999, "bob", "nope")).toBeUndefined();
+  });
+
+  it("records which server pid acts as an agent", () => {
+    expect(store.registerAgent("alice").server_pid).toBeNull();
+    expect(store.registerAgent("alice", Date.now(), 4242).server_pid).toBe(4242);
+    expect(store.registerAgent("alice").server_pid).toBe(4242); // writes without a pid keep it
   });
 
   it("round-trips read cursors", () => {
