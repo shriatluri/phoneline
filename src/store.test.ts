@@ -98,6 +98,23 @@ describe("Store", () => {
     expect(store.getThreads().map((t) => t.question).sort()).toEqual(["kept answered", "new open"]);
   });
 
+  it("keeps the question index in step with threads", () => {
+    const match = (q: string) =>
+      store.db
+        .prepare("SELECT rowid FROM threads_fts WHERE threads_fts MATCH ? ORDER BY rowid")
+        .all(q)
+        .map((r) => (r as { rowid: number }).rowid);
+
+    const t = store.createThread("alice", "Which port does the backend listen on?");
+    expect(match("listening")).toEqual([t.id]); // porter stemming
+    store.answerThread(t.id, "bob", "3000");
+    expect(match("port")).toEqual([t.id]); // answering leaves the index alone
+
+    store.db.prepare("DELETE FROM threads WHERE id = ?").run(t.id);
+    expect(match("port")).toEqual([]);
+    expect(store.db.prepare("INSERT INTO threads_fts (threads_fts) VALUES ('integrity-check')").run()).toBeTruthy();
+  });
+
   it("round-trips read cursors", () => {
     expect(store.getCursor("alice")).toBe(0);
     store.setStatus("bob", "hello");

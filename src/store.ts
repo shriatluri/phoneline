@@ -62,6 +62,23 @@ CREATE TABLE IF NOT EXISTS read_cursors (
 
 CREATE INDEX IF NOT EXISTS statuses_seq ON statuses(seq);
 CREATE INDEX IF NOT EXISTS threads_seq ON threads(seq);
+
+-- Full-text index over questions, for ask's duplicate check. External
+-- content: the text lives in threads, and these triggers keep the index in
+-- step. Only the question is indexed, so answering a thread doesn't touch it.
+CREATE VIRTUAL TABLE IF NOT EXISTS threads_fts USING fts5(
+  question, content = 'threads', content_rowid = 'id', tokenize = 'porter unicode61'
+);
+CREATE TRIGGER IF NOT EXISTS threads_fts_insert AFTER INSERT ON threads BEGIN
+  INSERT INTO threads_fts (rowid, question) VALUES (new.id, new.question);
+END;
+CREATE TRIGGER IF NOT EXISTS threads_fts_delete AFTER DELETE ON threads BEGIN
+  INSERT INTO threads_fts (threads_fts, rowid, question) VALUES ('delete', old.id, old.question);
+END;
+CREATE TRIGGER IF NOT EXISTS threads_fts_update AFTER UPDATE OF question ON threads BEGIN
+  INSERT INTO threads_fts (threads_fts, rowid, question) VALUES ('delete', old.id, old.question);
+  INSERT INTO threads_fts (rowid, question) VALUES (new.id, new.question);
+END;
 `;
 
 export interface Agent {
