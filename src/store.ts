@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -81,28 +81,39 @@ export interface Thread {
   seq: number;
 }
 
-/** Git repo root for `cwd`, or `cwd` itself when it is not inside a repo. */
-export function repoRoot(cwd = process.cwd()): string {
+/** The directory Claude Code was started in; the server and hook both resolve from here. */
+export function projectDir(): string {
+  return process.env.CLAUDE_PROJECT_DIR || process.cwd();
+}
+
+/**
+ * The repo's shared .git directory, or `cwd` itself when it is not inside a repo.
+ * A main checkout and its worktrees all return the same path, so they share a DB.
+ */
+export function repoRoot(cwd = projectDir()): string {
   try {
-    return execFileSync("git", ["rev-parse", "--show-toplevel"], {
+    const dir = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
+    return realpathSync(dir);
   } catch {
     return cwd;
   }
 }
 
-/** e.g. "/Users/me/code/My App" -> "my-app-1a2b3c4d" */
+/** e.g. "/Users/me/code/My App/.git" -> "my-app-1a2b3c4d" */
 export function repoKey(root: string): string {
-  const name = basename(root).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "repo";
+  // The common dir is usually ".../<repo>/.git", so name it after its parent.
+  const display = basename(root) === ".git" ? basename(dirname(root)) : basename(root, ".git");
+  const name = display.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "repo";
   const hash = createHash("sha256").update(root).digest("hex").slice(0, 8);
   return `${name}-${hash}`;
 }
 
 /** PHONELINE_DB wins; otherwise ~/.phoneline/<repo-key>.db */
-export function defaultDbPath(cwd = process.cwd()): string {
+export function defaultDbPath(cwd = projectDir()): string {
   return process.env.PHONELINE_DB || join(homedir(), ".phoneline", `${repoKey(repoRoot(cwd))}.db`);
 }
 

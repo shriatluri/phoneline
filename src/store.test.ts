@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SCHEMA_VERSION, Store, defaultDbPath, repoKey } from "./store.js";
+import { SCHEMA_VERSION, Store, defaultDbPath, repoKey, repoRoot } from "./store.js";
 
 describe("Store", () => {
   let dir: string;
@@ -90,8 +91,38 @@ describe("Store", () => {
 
 describe("db path", () => {
   it("derives a readable, unique repo key", () => {
-    expect(repoKey("/Users/me/code/My App")).toMatch(/^my-app-[0-9a-f]{8}$/);
-    expect(repoKey("/a/phoneline")).not.toBe(repoKey("/b/phoneline"));
+    expect(repoKey("/Users/me/code/My App/.git")).toMatch(/^my-app-[0-9a-f]{8}$/);
+    expect(repoKey("/srv/phoneline.git")).toMatch(/^phoneline-[0-9a-f]{8}$/); // bare repo
+    expect(repoKey("/a/phoneline/.git")).not.toBe(repoKey("/b/phoneline/.git"));
+  });
+
+  it("gives a checkout, its subdirectories, and its worktrees one DB", () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "phoneline-git-")));
+    try {
+      const main = join(dir, "app");
+      const git = (...args: string[]) => execFileSync("git", args, { cwd: main, stdio: "ignore" });
+      mkdirSync(join(main, "src"), { recursive: true });
+      git("init", "-q", "-b", "main");
+      git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init");
+      git("worktree", "add", "-q", join(dir, "app-feature"), "-b", "feature");
+
+      expect(repoRoot(main)).toBe(join(main, ".git"));
+      const path = defaultDbPath(main);
+      expect(path).toMatch(/app-[0-9a-f]{8}\.db$/);
+      expect(defaultDbPath(join(main, "src"))).toBe(path);
+      expect(defaultDbPath(join(dir, "app-feature"))).toBe(path);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the directory itself outside git", () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "phoneline-nogit-")));
+    try {
+      expect(repoRoot(dir)).toBe(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("honors PHONELINE_DB", () => {
