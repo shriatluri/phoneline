@@ -2,6 +2,21 @@
   "name": "phoneline",
   "version": "0.0.1",
   "description": "An efficient phone line for your coding agents",
+  "keywords": [
+    "claude-code",
+    "mcp",
+    "agents",
+    "coding-agents",
+    "sqlite"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shriatluri/phoneline.git"
+  },
+  "homepage": "https://github.com/shriatluri/phoneline#readme",
+  "bugs": {
+    "url": "https://github.com/shriatluri/phoneline/issues"
+  },
   "type": "module",
   "bin": {
     "phoneline": "dist/cli.js"
@@ -15,7 +30,8 @@
   "scripts": {
     "build": "tsc && chmod +x dist/cli.js",
     "dev": "tsc --watch",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "npm test && npm run build"
   },
   "license": "MIT",
   "dependencies": {
