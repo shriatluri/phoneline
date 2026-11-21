@@ -7,6 +7,15 @@ import { basename, dirname, join } from "node:path";
 
 export const SCHEMA_VERSION = 1;
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** How long rows live before prune() deletes them. */
+export const RETENTION = {
+  statusMs: 7 * DAY_MS,
+  openThreadMs: 7 * DAY_MS,
+  // Answered threads are the dedupe corpus for ask, so they live longer.
+  answeredThreadMs: 30 * DAY_MS,
+};
+
 // Every write bumps one global counter (meta.seq) and stamps the row it touched
 // with the new value. Read cursors store the last seq an agent has seen, so
 // "what is new to me" is just `WHERE seq > cursor`. We use a counter instead of
@@ -53,6 +62,23 @@ CREATE TABLE IF NOT EXISTS read_cursors (
 
 CREATE INDEX IF NOT EXISTS statuses_seq ON statuses(seq);
 CREATE INDEX IF NOT EXISTS threads_seq ON threads(seq);
+
+-- Full-text index over questions, for ask's duplicate check. External
+-- content: the text lives in threads, and these triggers keep the index in
+-- step. Only the question is indexed, so answering a thread doesn't touch it.
+CREATE VIRTUAL TABLE IF NOT EXISTS threads_fts USING fts5(
+  question, content = 'threads', content_rowid = 'id', tokenize = 'porter unicode61'
+);
+CREATE TRIGGER IF NOT EXISTS threads_fts_insert AFTER INSERT ON threads BEGIN
+  INSERT INTO threads_fts (rowid, question) VALUES (new.id, new.question);
+END;
+CREATE TRIGGER IF NOT EXISTS threads_fts_delete AFTER DELETE ON threads BEGIN
+  INSERT INTO threads_fts (threads_fts, rowid, question) VALUES ('delete', old.id, old.question);
+END;
+CREATE TRIGGER IF NOT EXISTS threads_fts_update AFTER UPDATE OF question ON threads BEGIN
+  INSERT INTO threads_fts (threads_fts, rowid, question) VALUES ('delete', old.id, old.question);
+  INSERT INTO threads_fts (rowid, question) VALUES (new.id, new.question);
+END;
 `;
 
 export interface Agent {
@@ -79,6 +105,29 @@ export interface Thread {
   created_at: number;
   answered_at: number | null;
   seq: number;
+}
+
+// Common English words that would make every question look alike.
+const STOPWORDS = new Set(
+  (
+    "a about after again all am an and any are as at be been before being but by can could " +
+    "did do does doing don for from had has have having he her here hers him his how i if in " +
+    "into is it its just me my no nor not now of off on once only or other our out over own " +
+    "same she should so some such than that the their them then there these they this those " +
+    "to too under until up very was we were what when where which while who whom why will " +
+    "with would you your anyone know does someone anybody"
+  ).split(" "),
+);
+
+/**
+ * Turn free text into an FTS5 query: drop stopwords, quote each remaining
+ * term, OR them together. Returns undefined when nothing is left to search.
+ */
+export function ftsQuery(text: string): string | undefined {
+  const terms = new Set(
+    (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((t) => t.length > 1 && !STOPWORDS.has(t)),
+  );
+  return terms.size ? [...terms].map((t) => `"${t}"`).join(" OR ") : undefined;
 }
 
 /** The directory Claude Code was started in; the server and hook both resolve from here. */
@@ -184,6 +233,10 @@ export class Store {
       .get(name, now, now, serverPid ?? null) as Agent;
   }
 
+  getAgent(name: string): Agent | undefined {
+    return this.db.prepare("SELECT * FROM agents WHERE name = ?").get(name) as Agent | undefined;
+  }
+
   getAgents(): Agent[] {
     return this.db.prepare("SELECT * FROM agents ORDER BY name").all() as Agent[];
   }
@@ -256,6 +309,25 @@ export class Store {
     });
   }
 
+  /**
+   * Up to `limit` threads whose questions best match `text`, best first by
+   * bm25. There is no score cutoff: bm25 scores shift with the corpus, so the
+   * caller (ultimately the model) judges whether a match is a real duplicate.
+   */
+  searchThreads(text: string, limit = 3): Thread[] {
+    const query = ftsQuery(text);
+    if (!query) return [];
+    return this.db
+      .prepare(
+        `SELECT threads.* FROM threads_fts
+           JOIN threads ON threads.id = threads_fts.rowid
+          WHERE threads_fts MATCH ?
+          ORDER BY bm25(threads_fts)
+          LIMIT ?`,
+      )
+      .all(query, limit) as Thread[];
+  }
+
   getThread(id: number): Thread | undefined {
     return this.db.prepare("SELECT * FROM threads WHERE id = ?").get(id) as Thread | undefined;
   }
@@ -289,11 +361,31 @@ export class Store {
     });
   }
 
+  // --- retention ------------------------------------------------------------
+
+  /** Delete old statuses and threads (see RETENTION). Returns how many rows went. */
+  prune(now = Date.now()): { statuses: number; threads: number } {
+    return this.write(() => {
+      const statuses = this.db
+        .prepare("DELETE FROM statuses WHERE updated_at < ?")
+        .run(now - RETENTION.statusMs).changes;
+      const threads = this.db
+        .prepare(
+          `DELETE FROM threads
+            WHERE (answer IS NULL AND created_at < ?)
+               OR (answer IS NOT NULL AND answered_at < ?)`,
+        )
+        .run(now - RETENTION.openThreadMs, now - RETENTION.answeredThreadMs).changes;
+      return { statuses, threads };
+    });
+  }
+
   // --- internals ------------------------------------------------------------
 
   // IMMEDIATE takes the write lock up front, so the busy timeout applies and
-  // two processes can't both read the same seq before bumping it.
-  private write<T>(fn: () => T): T {
+  // two processes can't both read the same seq before bumping it. Nested
+  // calls become savepoints inside the outer transaction.
+  write<T>(fn: () => T): T {
     return this.db.transaction(fn).immediate();
   }
 

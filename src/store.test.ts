@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SCHEMA_VERSION, Store, defaultDbPath, openStore, repoKey, repoRoot } from "./store.js";
+import { SCHEMA_VERSION, Store, defaultDbPath, ftsQuery, openStore, repoKey, repoRoot } from "./store.js";
 
 describe("Store", () => {
   let dir: string;
@@ -81,6 +81,61 @@ describe("Store", () => {
     expect(store.registerAgent("alice").server_pid).toBe(4242); // writes without a pid keep it
   });
 
+  it("prunes old statuses and threads", () => {
+    const day = 24 * 60 * 60 * 1000;
+    const now = 100 * day;
+    store.setStatus("old", "stale", now - 8 * day);
+    store.setStatus("new", "fresh", now - 6 * day);
+    store.createThread("a", "old open", null, now - 8 * day);
+    store.createThread("a", "new open", null, now - 6 * day);
+    const oldAnswered = store.createThread("a", "old answered", null, now - 40 * day);
+    store.answerThread(oldAnswered.id, "b", "x", now - 31 * day);
+    const keptAnswered = store.createThread("a", "kept answered", null, now - 40 * day);
+    store.answerThread(keptAnswered.id, "b", "y", now - 20 * day); // answered 20 days ago: keep
+
+    expect(store.prune(now)).toEqual({ statuses: 1, threads: 2 });
+    expect(store.getStatuses().map((s) => s.agent)).toEqual(["new"]);
+    expect(store.getThreads().map((t) => t.question).sort()).toEqual(["kept answered", "new open"]);
+  });
+
+  it("keeps the question index in step with threads", () => {
+    const match = (q: string) =>
+      store.db
+        .prepare("SELECT rowid FROM threads_fts WHERE threads_fts MATCH ? ORDER BY rowid")
+        .all(q)
+        .map((r) => (r as { rowid: number }).rowid);
+
+    const t = store.createThread("alice", "Which port does the backend listen on?");
+    expect(match("listening")).toEqual([t.id]); // porter stemming
+    store.answerThread(t.id, "bob", "3000");
+    expect(match("port")).toEqual([t.id]); // answering leaves the index alone
+
+    store.db.prepare("DELETE FROM threads WHERE id = ?").run(t.id);
+    expect(match("port")).toEqual([]);
+    expect(store.db.prepare("INSERT INTO threads_fts (threads_fts) VALUES ('integrity-check')").run()).toBeTruthy();
+  });
+
+  it("finds earlier questions that paraphrase a new one", () => {
+    const questions = [
+      "What port does the API server run on?",
+      "Which zod import should we use, zod or zod/v4?",
+      "Where are the database migrations kept?",
+      "How do I run the end-to-end tests locally?",
+      "Who owns the auth middleware?",
+    ];
+    const ids = questions.map((q) => store.createThread("alice", q).id);
+    const top = (q: string) => store.searchThreads(q)[0]?.id;
+
+    expect(top("which port does the backend listen on")).toBe(ids[0]);
+    expect(top("should I import from zod/v4?")).toBe(ids[1]);
+    expect(top("where do DB migrations live")).toBe(ids[2]);
+    expect(top("running e2e tests on my machine")).toBe(ids[3]);
+    expect(top("who is responsible for the auth middleware")).toBe(ids[4]);
+    expect(store.searchThreads("port zod migrations tests")).toHaveLength(3); // 4 match; capped at 3
+    expect(store.searchThreads("what is the")).toEqual([]); // only stopwords
+    expect(store.searchThreads("kubernetes")).toEqual([]);
+  });
+
   it("round-trips read cursors", () => {
     expect(store.getCursor("alice")).toBe(0);
     store.setStatus("bob", "hello");
@@ -105,6 +160,15 @@ describe("Store", () => {
     } finally {
       other.close();
     }
+  });
+});
+
+describe("ftsQuery", () => {
+  it("quotes non-stopword terms and ORs them", () => {
+    expect(ftsQuery("What port does the API use?")).toBe('"port" OR "api" OR "use"');
+    expect(ftsQuery('a "quoted" NEAR(x) port-forward')).toBe('"quoted" OR "near" OR "port" OR "forward"');
+    expect(ftsQuery("the of and")).toBeUndefined();
+    expect(ftsQuery("")).toBeUndefined();
   });
 });
 
