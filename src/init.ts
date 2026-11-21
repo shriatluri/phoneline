@@ -47,8 +47,13 @@ function readSettings(path: string): Settings {
   return parsed as Settings;
 }
 
-/** Write via a temp file and rename, so a crash can't leave half a file. */
-function writeSettings(path: string, settings: Settings): void {
+/**
+ * Write via a temp file and rename, so a crash can't leave half a file. A
+ * symlinked settings.json (e.g. from a dotfiles repo) is written through to
+ * its target, so the link survives.
+ */
+function writeSettings(linkPath: string, settings: Settings): void {
+  const path = existsSync(linkPath) ? realpathSync(linkPath) : linkPath;
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.phoneline-tmp`;
   writeFileSync(tmp, `${JSON.stringify(settings, null, 2)}\n`);

@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type InitOptions, runInit, runUninstall } from "./init.js";
@@ -78,6 +87,41 @@ describe("init", () => {
     expect(JSON.parse(readFileSync(`${settingsPath()}.before-phoneline`, "utf8"))).toEqual(original);
     expect(calls.filter((c) => c[1] === "add")).toHaveLength(2);
     expect(registered).toBe(true);
+  });
+
+  it("writes through a symlinked settings.json, keeping the link", () => {
+    mkdirSync(configDir);
+    const dotfile = join(dir, "dotfiles-settings.json");
+    writeFileSync(dotfile, JSON.stringify({ theme: "dark" }));
+    symlinkSync(dotfile, settingsPath());
+
+    expect(runInit(opts())).toBe(0);
+    expect(lstatSync(settingsPath()).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(readFileSync(dotfile, "utf8")).hooks.UserPromptSubmit).toHaveLength(1);
+
+    expect(runUninstall(opts())).toBe(0);
+    expect(lstatSync(settingsPath()).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(readFileSync(dotfile, "utf8"))).toEqual({ theme: "dark" });
+  });
+
+  it("finds its own hook when installed in a folder not named phoneline", () => {
+    // mkdtemp under tmpdir with a neutral prefix, so no path segment says "phoneline".
+    const elsewhere = mkdtempSync(join(tmpdir(), "pl-"));
+    try {
+      const dist = join(elsewhere, "dist");
+      mkdirSync(dist);
+      writeFileSync(join(dist, "cli.js"), "");
+      writeFileSync(join(dist, "hook.js"), "");
+
+      expect(runInit(opts({ distDir: dist }))).toBe(0);
+      expect(runInit(opts({ distDir: dist, nodePath: "/new/node" }))).toBe(0);
+      expect(readSettings().hooks.UserPromptSubmit).toHaveLength(1);
+
+      expect(runUninstall(opts({ distDir: dist }))).toBe(0);
+      expect(existsSync(settingsPath()) && readSettings()).toEqual({});
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
   });
 
   it("changes nothing when settings.json is not valid JSON", () => {
