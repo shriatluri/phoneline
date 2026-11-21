@@ -12,7 +12,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 NODE="$(command -v node)"
-WORK="$(mktemp -d -t phoneline-e2e)"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/phoneline-e2e.XXXXXX")"
 REPO="$WORK/app"
 
 git init -q -b main "$REPO"
