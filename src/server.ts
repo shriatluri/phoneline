@@ -1,5 +1,5 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { McpServer } from "@modelcontextprotocol/server";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 
 export const VERSION = "0.0.1";
 
@@ -23,8 +23,7 @@ export function createServer(): McpServer {
 }
 
 export async function startStdioServer(): Promise<void> {
-  const server = createServer();
-  await server.connect(new StdioServerTransport());
+  serveStdio(createServer);
   // stdout carries JSON-RPC, so any logging must go to stderr.
   console.error(`phoneline ${VERSION} MCP server running on stdio`);
 }
