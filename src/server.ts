@@ -1,12 +1,14 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
+import { createRequire } from "node:module";
 import * as z from "zod/v4";
 import { PEER_NOTICE, fitToBudget, formatAge, formatCandidate, peerMessage } from "./format.js";
 import { agentName, cleanName } from "./identity.js";
 import { Store, defaultDbPath, openStore } from "./store.js";
 import { readCursor, unreadItems } from "./unread.js";
 
-export const VERSION = "0.0.1";
+// package.json sits one level up from both src/ and dist/.
+export const VERSION: string = createRequire(import.meta.url)("../package.json").version;
 
 export const LIMITS = { status: 280, question: 500, answer: 1000 };
 
@@ -150,6 +152,10 @@ export function createServer(opts: ServerOptions = {}): McpServer {
     async ({ question, to, force }) => {
       const me = agent();
       const at = now();
+      const target = to === undefined ? null : cleanName(to);
+      if (target === me) {
+        return { ...text(`You are "${me}", so nobody else would see this. Leave \`to\` out to ask anyone.`), isError: true };
+      }
 
       if (!force) {
         const candidates = existingStore()?.searchThreads(question) ?? [];
@@ -165,15 +171,22 @@ export function createServer(opts: ServerOptions = {}): McpServer {
         }
       }
 
-      const target = to === undefined ? null : cleanName(to);
       const s = writableStore();
-      const thread = s.write(() => {
+      const { thread, known } = s.write(() => {
         claim(s, me, at);
-        return s.createThread(me, question, target, at);
+        return { thread: s.createThread(me, question, target, at), known: s.getAgents().map((a) => a.name) };
       });
-      return text(
-        `Posted as thread #${thread.id}, to ${target ?? "anyone"}. The answer will show up in your inbox.`,
-      );
+      const out = [`Posted as thread #${thread.id}, to ${target ?? "anyone"}. The answer will show up in your inbox.`];
+      // An addressee that hasn't used phoneline yet is allowed, but it's often a
+      // typo or the wrong case, and then the question would never be seen.
+      if (target !== null && !known.includes(target)) {
+        const others = known.filter((n) => n !== me && n !== target);
+        out.push(
+          `Note: no agent named "${target}" has used phoneline on this repo yet, so only an agent with ` +
+            `exactly that name will see it.${others.length ? ` Known agents: ${others.join(", ")}.` : ""}`,
+        );
+      }
+      return text(out.join("\n"));
     },
   );
 

@@ -47,8 +47,13 @@ function readSettings(path: string): Settings {
   return parsed as Settings;
 }
 
-/** Write via a temp file and rename, so a crash can't leave half a file. */
-function writeSettings(path: string, settings: Settings): void {
+/**
+ * Write via a temp file and rename, so a crash can't leave half a file. A
+ * symlinked settings.json (e.g. from a dotfiles repo) is written through to
+ * its target, so the link survives.
+ */
+function writeSettings(linkPath: string, settings: Settings): void {
+  const path = existsSync(linkPath) ? realpathSync(linkPath) : linkPath;
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.phoneline-tmp`;
   writeFileSync(tmp, `${JSON.stringify(settings, null, 2)}\n`);
@@ -101,7 +106,7 @@ export function runInit(opts: InitOptions = {}): number {
   }
 
   const backup = backUpOnce(settingsPath);
-  writeSettings(settingsPath, withHook(settings, hookCommand(nodePath, hookPath)));
+  writeSettings(settingsPath, withHook(settings, hookCommand(nodePath, hookPath), hookPath));
 
   log(
     [
@@ -120,7 +125,7 @@ export function runInit(opts: InitOptions = {}): number {
 
 /** Undo init: remove the MCP server and phoneline's hook. Databases are kept. */
 export function runUninstall(opts: InitOptions = {}): number {
-  const { configDir, claude, log } = resolve(opts);
+  const { configDir, hookPath, claude, log } = resolve(opts);
   const settingsPath = join(configDir, "settings.json");
 
   let settings: Settings;
@@ -135,7 +140,7 @@ export function runUninstall(opts: InitOptions = {}): number {
   if (removedServer.missing) {
     log("phoneline uninstall: the `claude` command isn't on your PATH, so the MCP server wasn't removed.");
   }
-  const { settings: next, removed } = withoutHook(settings);
+  const { settings: next, removed } = withoutHook(settings, hookPath);
   if (removed > 0) writeSettings(settingsPath, next);
 
   log(

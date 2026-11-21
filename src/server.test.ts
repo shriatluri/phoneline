@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ServerOptions, createServer, pruneOnStart } from "./server.js";
 import { Store } from "./store.js";
+
+const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
 /** A connected client acting as one agent. */
 async function connect(opts: ServerOptions): Promise<Client> {
@@ -46,7 +48,7 @@ describe("phoneline server", () => {
 
   it("initializes and lists the tools", async () => {
     const client = await as("me");
-    expect(client.getServerVersion()?.name).toBe("phoneline");
+    expect(client.getServerVersion()).toMatchObject({ name: "phoneline", version: pkg.version });
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(["answer", "ask", "inbox", "post_status"]);
   });
@@ -83,6 +85,7 @@ describe("phoneline server", () => {
     it("posts a new question, and the addressee sees it", async () => {
       const ui = await as("ui");
       const api = await as("api");
+      await call(api, "post_status", { summary: "Working on the API" });
       const posted = await call(ui, "ask", { question: "What port does the API listen on?", to: "api" });
       expect(posted.text).toBe("Posted as thread #1, to api. The answer will show up in your inbox.");
       expect((await call(api, "inbox")).text).toContain(
@@ -107,6 +110,28 @@ describe("phoneline server", () => {
 
       const forced = await call(docs, "ask", { question: "which port is the api server on", force: true });
       expect(forced.text).toMatch(/^Posted as thread #2, to anyone\./);
+    });
+
+    it("rejects a question addressed to myself", async () => {
+      const ui = await as("ui");
+      const self = await call(ui, "ask", { question: "Is the build green?", to: "ui" });
+      expect(self.isError).toBe(true);
+      expect(self.text).toContain('You are "ui"');
+      expect(existsSync(dbPath)).toBe(false);
+    });
+
+    it("posts to an agent that hasn't joined yet, but says so and lists the known ones", async () => {
+      const ui = await as("ui");
+      const api = await as("api");
+      await call(api, "post_status", { summary: "Working on the API" });
+      const typo = await call(ui, "ask", { question: "What port does the server use?", to: "API" });
+      expect(typo.isError).toBe(false);
+      expect(typo.text).toMatch(/^Posted as thread #1, to API\./);
+      expect(typo.text).toContain('no agent named "API" has used phoneline on this repo yet');
+      expect(typo.text).toContain("Known agents: api.");
+
+      const known = await call(ui, "ask", { question: "Which database driver ships in prod?", to: "api" });
+      expect(known.text).not.toContain("Note:");
     });
 
     it("cleans the addressee name and rejects over-long questions", async () => {

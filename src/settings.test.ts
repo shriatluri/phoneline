@@ -15,6 +15,19 @@ describe("settings", () => {
     expect(isPhonelineHook({ type: "prompt" })).toBe(false);
   });
 
+  it("recognises this install's hook by path, even outside a folder named phoneline", () => {
+    const hookPath = "/Users/me/code/pl/dist/hook.js";
+    const cmd = hookCommand("/usr/bin/node", hookPath);
+    expect(isPhonelineHook({ command: cmd })).toBe(false);
+    expect(isPhonelineHook({ command: cmd }, hookPath)).toBe(true);
+
+    const upgraded = withHook(withHook({}, cmd, hookPath), hookCommand("/opt/node22/bin/node", hookPath), hookPath);
+    expect(upgraded.hooks?.UserPromptSubmit).toEqual([
+      { hooks: [{ type: "command", command: `"/opt/node22/bin/node" "${hookPath}"`, timeout: 5 }] },
+    ]);
+    expect(withoutHook(upgraded, hookPath)).toEqual({ settings: {}, removed: 1 });
+  });
+
   it("adds the hook to empty settings", () => {
     expect(withHook({}, ours)).toEqual({
       hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: ours, timeout: 5 }] }] },
