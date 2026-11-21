@@ -101,7 +101,7 @@ export function runInit(opts: InitOptions = {}): number {
   }
 
   const backup = backUpOnce(settingsPath);
-  writeSettings(settingsPath, withHook(settings, hookCommand(nodePath, hookPath)));
+  writeSettings(settingsPath, withHook(settings, hookCommand(nodePath, hookPath), hookPath));
 
   log(
     [
@@ -120,7 +120,7 @@ export function runInit(opts: InitOptions = {}): number {
 
 /** Undo init: remove the MCP server and phoneline's hook. Databases are kept. */
 export function runUninstall(opts: InitOptions = {}): number {
-  const { configDir, claude, log } = resolve(opts);
+  const { configDir, hookPath, claude, log } = resolve(opts);
   const settingsPath = join(configDir, "settings.json");
 
   let settings: Settings;
@@ -135,7 +135,7 @@ export function runUninstall(opts: InitOptions = {}): number {
   if (removedServer.missing) {
     log("phoneline uninstall: the `claude` command isn't on your PATH, so the MCP server wasn't removed.");
   }
-  const { settings: next, removed } = withoutHook(settings);
+  const { settings: next, removed } = withoutHook(settings, hookPath);
   if (removed > 0) writeSettings(settingsPath, next);
 
   log(

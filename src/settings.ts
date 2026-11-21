@@ -24,13 +24,18 @@ export function hookCommand(nodePath: string, hookPath: string): string {
   return `"${nodePath}" "${hookPath}"`;
 }
 
-/** Whether a hook entry is one phoneline wrote, from any install location. */
-export function isPhonelineHook(entry: HookEntry): boolean {
-  return typeof entry.command === "string" && /phoneline/.test(entry.command) && /hook\.js/.test(entry.command);
+/**
+ * Whether a hook entry is one phoneline wrote: any command running this
+ * install's `hookPath`, or a phoneline hook.js from another install location.
+ */
+export function isPhonelineHook(entry: HookEntry, hookPath?: string): boolean {
+  if (typeof entry.command !== "string") return false;
+  if (hookPath && entry.command.includes(hookPath)) return true;
+  return /phoneline/.test(entry.command) && /hook\.js/.test(entry.command);
 }
 
 /** Remove phoneline's hook entries, dropping any group they leave empty. */
-export function withoutHook(settings: Settings): { settings: Settings; removed: number } {
+export function withoutHook(settings: Settings, hookPath?: string): { settings: Settings; removed: number } {
   const groups = settings.hooks?.[HOOK_EVENT];
   if (!Array.isArray(groups)) return { settings, removed: 0 };
 
@@ -41,7 +46,7 @@ export function withoutHook(settings: Settings): { settings: Settings; removed: 
       kept.push(group);
       continue;
     }
-    const hooks = group.hooks.filter((h) => !isPhonelineHook(h));
+    const hooks = group.hooks.filter((h) => !isPhonelineHook(h, hookPath));
     removed += group.hooks.length - hooks.length;
     if (hooks.length > 0 || group.hooks.length === 0) kept.push({ ...group, hooks });
   }
@@ -55,8 +60,8 @@ export function withoutHook(settings: Settings): { settings: Settings; removed: 
 }
 
 /** Add phoneline's hook, replacing any earlier one, so re-running never duplicates it. */
-export function withHook(settings: Settings, command: string): Settings {
-  const base = withoutHook(settings).settings;
+export function withHook(settings: Settings, command: string, hookPath?: string): Settings {
+  const base = withoutHook(settings, hookPath).settings;
   const hooks = { ...base.hooks };
   const groups = Array.isArray(hooks[HOOK_EVENT]) ? (hooks[HOOK_EVENT] as HookGroup[]) : [];
   hooks[HOOK_EVENT] = [...groups, { hooks: [{ type: "command", command, timeout: HOOK_TIMEOUT_S }] }];
