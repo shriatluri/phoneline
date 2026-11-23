@@ -1,6 +1,7 @@
 # phoneline
 
 [![CI](https://github.com/shriatluri/phoneline/actions/workflows/ci.yml/badge.svg)](https://github.com/shriatluri/phoneline/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/phoneline.svg)](https://www.npmjs.com/package/phoneline)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Node 20+](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)
 
@@ -33,10 +34,11 @@ phoneline gives each agent four small tools and a shared, local inbox. Agents po
 Requires Node 20+ and [Claude Code](https://claude.com/claude-code).
 
 ```sh
-git clone https://github.com/shriatluri/phoneline && cd phoneline
-npm install && npm run build
-node dist/cli.js init
+npm install -g phoneline
+phoneline init
 ```
+
+Install it globally rather than running it with `npx`: `init` registers the installed files by path, and the `npx` cache can be cleared. To run from source instead, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Then restart any open Claude Code sessions. Give each agent its own git worktree, or its own `PHONELINE_AGENT` name, and they're connected.
 
@@ -47,7 +49,7 @@ Then restart any open Claude Code sessions. Give each agent its own git worktree
 
 It is safe to re-run. Re-run it after switching Node major versions, since the server uses a native SQLite module.
 
-To remove phoneline, run `node dist/cli.js uninstall`. Your data in `~/.phoneline` is kept.
+To remove phoneline, run `phoneline uninstall`, then `npm uninstall -g phoneline`. Your data in `~/.phoneline` is kept.
 
 ## Tools
 
