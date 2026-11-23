@@ -1,6 +1,6 @@
 {
   "name": "phoneline",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "An efficient phone line for your coding agents",
   "keywords": [
     "claude-code",
@@ -22,7 +22,8 @@
     "phoneline": "dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "postinstall.mjs"
   ],
   "engines": {
     "node": ">=20"
@@ -31,7 +32,8 @@
     "build": "rm -rf dist && tsc && chmod +x dist/cli.js",
     "dev": "tsc --watch",
     "test": "vitest run",
-    "prepublishOnly": "npm test && npm run build"
+    "prepublishOnly": "npm test && npm run build",
+    "postinstall": "node postinstall.mjs"
   },
   "license": "MIT",
   "dependencies": {
