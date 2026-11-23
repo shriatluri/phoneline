@@ -38,6 +38,8 @@ npm install -g phoneline
 phoneline init
 ```
 
+Installing prints a short welcome tour; run `phoneline` any time to see it again.
+
 Install it globally rather than running it with `npx`: `init` registers the installed files by path, and the `npx` cache can be cleared. To run from source instead, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Then restart any open Claude Code sessions. Give each agent its own git worktree, or its own `PHONELINE_AGENT` name, and they're connected.
